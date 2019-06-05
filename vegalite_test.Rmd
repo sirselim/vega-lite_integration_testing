@@ -1,0 +1,473 @@
+---
+title: "Testing the integration of vega-lite in RMarkdown documents"
+author: "Miles Benton"
+date: "30/05/2019"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Set up the environment
+
+```{r, message=FALSE, warning=FALSE}
+# require(altair)       # this is the r wrapper for the python package
+require(vegawidget)
+require(reticulate)   # allows us to run python alongside R in dedicated chunks
+reticulate::use_condaenv("r-reticulate")    # dedicated conda env with appropriate packages installed
+matplotlib <- import("matplotlib")          # these two lines allow the plotting of graphs using
+matplotlib$use("Agg", force = TRUE)         # the matplotlib library for python
+```
+
+# testing `matplotlib` plotting in RMarkdown
+
+```{python}
+import pandas as pd
+import matplotlib.pyplot as plt
+df=pd.DataFrame([[1, 2], [3, 4], [4, 3], [2, 3]])
+fig = plt.figure(figsize=(14,8))
+for i in df.columns:
+    ax=plt.subplot(2,1,i+1) 
+    df[[i]].plot(ax=ax)
+    print(i)
+
+plt.show()
+```
+
+# create vega-lite plot using `altair` and display in document
+
+```{python}
+import altair as alt
+from vega_datasets import data
+
+source = data.population.url
+
+chart = alt.Chart(source).mark_boxplot(extent='min-max').encode(
+  x='age:O',
+  y='people:Q'
+)
+
+chart.save('figures/chart.html')
+```
+
+```{r}
+print(py$chart)
+```
+
+### The above chart should be rendered below using `iframe` tags
+
+Above we saved the plot out to an html file (`chart.html`). Using `iframe` tags we can then embed this back into the RMarkdown document.
+
+Here is the code: `<iframe width="600" height="400" src="figures/chart.html" frameborder="0"></iframe>`
+
+Below is the result:
+
+<iframe width="600" height="400" src="figures/chart.html" frameborder="0"></iframe>
+
+# Testing a second `iframe` embed
+
+```{python}
+import pandas as pd
+data = pd.DataFrame({'a': list('CCCDDDEEE'),
+                     'b': [2, 7, 4, 1, 2, 6, 8, 4, 7]})
+chart2 = alt.Chart(data).mark_bar(color='firebrick').encode(
+    alt.Y('a', title='category'),
+    alt.X('average(b)', title='avg(b) by category')
+)
+chart2.save('figures/chart2.html')
+```
+
+### The above chart should be rendered below using `iframe` tags:
+
+<iframe width="600" height="135" src="figures/chart2.html" frameborder="0"></iframe>
+
+# using `vegawidget` in R
+
+This time we'll use R to create a vega-lite plot, specifically the `vegawidget` package:
+
+```{r}
+spec_mtcars <-
+  list(
+    `$schema` = vega_schema(), # specifies Vega-Lite
+    description = "An mtcars example.",
+    data = list(values = mtcars),
+    mark = "point",
+    encoding = list(
+      x = list(field = "wt", type = "quantitative"),
+      y = list(field = "mpg", type = "quantitative"),
+      color = list(field = "cyl", type = "nominal")
+    )
+  ) %>% 
+  as_vegaspec()
+
+spec_mtcars
+```
+
+This package has several advantages in terms of ability to integrate with Shiny, will look into this further.
+
+With a little bit of tweaking it looks like boxplots are supported in `vegawidget`, this is an advantage over the R package `vegalite` and the R implementation of `altair` which both seem to be lagging behind on an older version of vega-lite.
+
+Example of a boxplot generated using R:
+
+```{r}
+population <- jsonlite::fromJSON("data/population.json")
+
+  list(
+    `$schema` = vega_schema(), # specifies Vega-Lite
+    description = "An boxplot example.",
+    data = list(values = population),
+    mark = list(type = "boxplot", extent = 'min-max'),
+    encoding = list(
+      x = list(field = "age", type = "nominal"),
+      y = list(field = "people", type = "quantitative")
+    )
+  ) %>% 
+  as_vegaspec()
+```
+
+## Faceted chart
+
+```{r, warning=FALSE}
+facet_chart <-
+  list(
+    `$schema` = vega_schema(),
+    data = list(values = data_seattle_daily),
+    facet = list(
+      row = list(
+        field = "date", 
+        type = "ordinal", 
+        timeUnit = "utcyear",
+        title = "Faceted chart"
+      )
+    ),
+    spec = list(
+      height = 100,
+      mark = "bar",
+      encoding = list(
+        x = list(
+          field = "date", 
+          type = "ordinal", 
+          timeUnit = "utcmonth",
+          title = "month(date)"
+        ),
+        y = list(
+          field = "temp_max",
+          type = "quantitative",
+          aggregate = "max",
+          title = "max(temp_max)"
+        )
+      )
+    )
+  ) %>%
+  as_vegaspec()
+
+facet_chart
+```
+
+```{python}
+import altair as alt
+from vega_datasets import data
+
+source = data.iris()
+
+base = alt.Chart(source)
+
+xscale = alt.Scale(domain=(4.0, 8.0))
+yscale = alt.Scale(domain=(1.9, 4.55))
+
+area_args = {'opacity': .3, 'interpolate': 'step'}
+
+points = base.mark_circle().encode(
+    alt.X('sepalLength', scale=xscale),
+    alt.Y('sepalWidth', scale=yscale),
+    color='species',
+)
+
+top_hist = base.mark_area(**area_args).encode(
+    alt.X('sepalLength:Q',
+          # when using bins, the axis scale is set through
+          # the bin extent, so we do not specify the scale here
+          # (which would be ignored anyway)
+          bin=alt.Bin(maxbins=20, extent=xscale.domain),
+          stack=None,
+          title=''
+         ),
+    alt.Y('count()', stack=None, title=''),
+    alt.Color('species:N'),
+).properties(height=60)
+
+right_hist = base.mark_area(**area_args).encode(
+    alt.Y('sepalWidth:Q',
+          bin=alt.Bin(maxbins=20, extent=yscale.domain),
+          stack=None,
+          title='',
+         ),
+    alt.X('count()', stack=None, title=''),
+    alt.Color('species:N'),
+).properties(width=60)
+
+scatterhist = top_hist & (points | right_hist)
+scatterhist.save("figures/scatterhist.html")
+```
+
+<iframe width="700" height="480" src="figures/scatterhist.html" frameborder="0"></iframe>
+
+## maps
+
+```{python}
+import altair as alt
+from vega_datasets import data
+
+counties = alt.topo_feature(data.us_10m.url, 'counties')
+source = data.unemployment.url
+
+usmap = alt.Chart(counties).mark_geoshape().encode(
+    color='rate:Q'
+).transform_lookup(
+    lookup='id',
+    from_=alt.LookupData(source, 'id', ['rate'])
+).project(
+    type='albersUsa'
+).properties(
+    width=500,
+    height=300
+)
+
+usmap.save('figures/usmap.html')
+```
+
+<iframe width="700" height="350" src="figures/usmap.html" frameborder="0"></iframe>
+
+```{python}
+import altair as alt
+from vega_datasets import data
+
+source = alt.topo_feature(data.world_110m.url, 'countries')
+
+base = alt.Chart(source).mark_geoshape(
+    fill='#666666',
+    stroke='white'
+).properties(
+    width=300,
+    height=180
+)
+
+projections = ['equirectangular', 'mercator', 'orthographic', 'gnomonic']
+charts = [base.project(proj).properties(title=proj)
+          for proj in projections]
+
+worldproj = alt.concat(*charts, columns=2)
+worldproj.save("figures/worldproj.html")
+```
+
+<iframe width="700" height="490" src="figures/worldproj.html" frameborder="0"></iframe>
+
+```{python}
+import altair as alt
+from vega_datasets import data
+
+# Since the data is more than 5,000 rows we'll import it from a URL
+source = data.zipcodes.url
+
+zipcode = alt.Chart(source).transform_calculate(
+    "leading digit", alt.expr.substring(alt.datum.zip_code, 0, 1)
+).mark_circle(size=3).encode(
+    longitude='longitude:Q',
+    latitude='latitude:Q',
+    color='leading digit:N',
+    tooltip='zip_code:N'
+).project(
+    type='albersUsa'
+).properties(
+    width=650,
+    height=400
+)
+
+zipcode.save("figures/zipcode.html")
+```
+
+<iframe width="800" height="475" src="figures/zipcode.html" frameborder="0"></iframe>
+
+## basic interaction
+
+```{python}
+import altair as alt
+from vega_datasets import data
+
+source = data.cars()
+
+intplot = alt.Chart(source).mark_circle().encode(
+    x='Horsepower',
+    y='Miles_per_Gallon',
+    color='Origin',
+).interactive()
+
+intplot.save("figures/intplot.html")
+```
+
+<iframe width="600" height="400" src="figures/intplot.html" frameborder="0"></iframe>
+
+# something a bit more advanced...
+
+## points and bars (Python)
+
+```{python}
+import altair as alt
+from vega_datasets import data
+
+source = data.cars()
+
+brush = alt.selection(type='interval')
+
+points = alt.Chart(source).mark_point().encode(
+    x='Horsepower:Q',
+    y='Miles_per_Gallon:Q',
+    color=alt.condition(brush, 'Origin:N', alt.value('lightgray'))
+).add_selection(
+    brush
+)
+
+points.save('figures/points.html')
+
+bars = alt.Chart(source).mark_bar().encode(
+    y='Origin:N',
+    color='Origin:N',
+    x='count(Origin):Q'
+).transform_filter(
+    brush
+)
+
+bars.save('figures/bars.html')
+
+# points & bars
+
+barpointchart = alt.vconcat(points, bars)
+barpointchart.save('figures/barpointchart.html')
+```
+
+<iframe width="700" height="495" src="figures/barpointchart.html" frameborder="0"></iframe>
+
+## weather
+
+```{python}
+import altair as alt
+from vega_datasets import data
+
+source = data.seattle_weather()
+
+scale = alt.Scale(domain=['sun', 'fog', 'drizzle', 'rain', 'snow'],
+                  range=['#e7ba52', '#a7a7a7', '#aec7e8', '#1f77b4', '#9467bd'])
+color = alt.Color('weather:N', scale=scale)
+
+# We create two selections:
+# - a brush that is active on the top panel
+# - a multi-click that is active on the bottom panel
+brush = alt.selection_interval(encodings=['x'])
+click = alt.selection_multi(encodings=['color'])
+
+# Top panel is scatter plot of temperature vs time
+points = alt.Chart().mark_point().encode(
+    alt.X('monthdate(date):T', title='Date'),
+    alt.Y('temp_max:Q',
+        title='Maximum Daily Temperature (C)',
+        scale=alt.Scale(domain=[-5, 40])
+    ),
+    color=alt.condition(brush, color, alt.value('lightgray')),
+    size=alt.Size('precipitation:Q', scale=alt.Scale(range=[5, 200]))
+).properties(
+    width=550,
+    height=300
+).add_selection(
+    brush
+).transform_filter(
+    click
+)
+
+# Bottom panel is a bar chart of weather type
+bars = alt.Chart().mark_bar().encode(
+    x='count()',
+    y='weather:N',
+    color=alt.condition(click, color, alt.value('lightgray')),
+).transform_filter(
+    brush
+).properties(
+    width=550,
+).add_selection(
+    click
+)
+
+weather = alt.vconcat(
+    points,
+    bars,
+    data=source,
+    title="Seattle Weather: 2012-2015"
+)
+weather.save("figures/weather.html")
+```
+
+<iframe width="770" height="550" src="figures/weather.html" frameborder="0"></iframe>
+
+## points and bars (`vegawidget`)
+
+!! Below is not working at this stage due to a conflict in versions between Python and R versions of altair and their versions of vegalite.
+
+```{r, eval=FALSE}
+scale <- alt$Scale(
+  domain = list("sun", "fog", "drizzle", "rain", "snow"),
+  range = list("#e7ba52", "#a7a7a7", "#aec7e8", "#1f77b4", "#9467bd")
+)
+
+color <- alt$Color("weather:N", scale = scale)
+
+# We create two selections:
+# - a brush that is active on the top panel
+# - a multi-click that is active on the bottom panel
+brush <- alt$selection_interval(encodings = list("x"))
+click <- alt$selection_multi(encodings = list("color"))
+
+# Top panel is scatter plot of temperature vs time
+points <- 
+  alt$Chart()$
+  mark_point()$
+  encode(
+    x = alt$X(
+      "date:T", 
+      timeUnit = "monthdate", 
+      axis=alt$Axis(title="Date")
+    ),
+    alt$Y(
+      "temp_max:Q",
+      axis = alt$Axis(title = "Maximum Daily Temperature (C)"),
+      scale = alt$Scale(domain = list(-5, 40))
+    ),
+    color = alt$condition(brush, color, alt$value("lightgray")),
+    size = alt$Size("precipitation:Q", scale = alt$Scale(range = list(5, 200)))
+  )$
+  properties(width = 600, height = 300, selection = brush)$
+  transform_filter(click$ref())
+
+# Bottom panel is a bar chart of weather type
+bars <- 
+  alt$Chart()$
+  mark_bar()$
+  encode(
+    x = "count(weather)",
+    y = "weather:N",
+    color = alt$condition(click, color, alt$value("lightgray"))
+  )$
+  transform_filter(brush$ref())$
+  properties(width = 600, selection = click)
+
+chart <- 
+  (points & bars)$ 
+  properties(
+    data = vega_data$seattle_weather(),
+    title = "Seattle Weather: 2012-2015"
+  )  
+
+chart
+```
+
